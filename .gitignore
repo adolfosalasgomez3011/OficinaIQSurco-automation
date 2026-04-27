@@ -11,6 +11,7 @@
 LeadAutomation/.env
 
 # Generated/runtime files
+LeadAutomation/lead_followup_tracker.csv
 LeadAutomation/webhook.log
 LeadAutomation/WhatsAppFollowupQueue.xlsx
 LeadAutomation/WhatsAppFollowupQueue_*.xlsx
