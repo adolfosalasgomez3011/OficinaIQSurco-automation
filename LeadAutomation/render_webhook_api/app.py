@@ -191,6 +191,35 @@ def root() -> JSONResponse:
     return JSONResponse({"service": APP_NAME, "status": "running"})
 
 
+@app.get("/privacy")
+def privacy_policy():
+    from fastapi.responses import HTMLResponse
+    html = """<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><title>Política de Privacidad – IQ Surco</title></head>
+<body style="font-family:Arial,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;">
+<h1>Política de Privacidad</h1>
+<p><strong>IQ Surco / S&amp;S Lead Manager</strong></p>
+<p>Esta aplicación recibe notificaciones de mensajes de WhatsApp enviados voluntariamente por usuarios
+interesados en las oficinas IQ Surco. Los datos recopilados (nombre, teléfono, contenido del mensaje)
+se usan exclusivamente para dar seguimiento comercial interno.</p>
+<h2>Datos recopilados</h2>
+<ul>
+  <li>Número de teléfono del remitente</li>
+  <li>Nombre asociado a la cuenta de WhatsApp</li>
+  <li>Contenido del mensaje recibido</li>
+</ul>
+<h2>Uso de los datos</h2>
+<p>Los datos se almacenan en una base de datos privada y se usan únicamente para contactar al prospecto
+en el contexto de la consulta realizada. No se comparten con terceros.</p>
+<h2>Contacto</h2>
+<p>Para cualquier consulta sobre privacidad: <a href="mailto:adolfosalasgomez@gmail.com">adolfosalasgomez@gmail.com</a></p>
+<p><em>Última actualización: Abril 2026</em></p>
+</body>
+</html>"""
+    return HTMLResponse(content=html, status_code=200)
+
+
 @app.post("/webhook")
 async def webhook(request: Request) -> JSONResponse:
     try:
