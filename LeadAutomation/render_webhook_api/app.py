@@ -61,17 +61,11 @@ def save_event(conn: psycopg.Connection, payload: dict[str, Any]) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
-                logger.info(
-                    "webhook_received object=%s entry_count=%s",
-                    payload.get("object"),
-                    len(payload.get("entry", [])),
-                )
             INSERT INTO webhook_events(provider, event_type, payload, received_at)
             VALUES (%s, %s, %s::jsonb, NOW())
             """,
             (
                 "whatsapp",
-                    logger.info("webhook_ignored unexpected_object=%s", payload.get("object"))
                 "messages",
                 json.dumps(payload, ensure_ascii=False),
             ),
@@ -83,16 +77,6 @@ def upsert_lead(conn: psycopg.Connection, phone: str, full_name: str) -> int:
     with conn.cursor() as cur:
         cur.execute(
             """
-                            metadata = value.get("metadata", {})
-                            logger.info(
-                                "webhook_change field=%s phone_number_id=%s display_phone=%s messages=%s statuses=%s contacts=%s",
-                                change.get("field"),
-                                metadata.get("phone_number_id"),
-                                metadata.get("display_phone_number"),
-                                len(value.get("messages", [])),
-                                len(value.get("statuses", [])),
-                                len(value.get("contacts", [])),
-                            )
             INSERT INTO leads (
                 lead_external_id,
                 full_name,
@@ -121,14 +105,6 @@ def upsert_lead(conn: psycopg.Connection, phone: str, full_name: str) -> int:
                 'no claro',
                 'pending',
                 %s,
-
-                                logger.info(
-                                    "webhook_message_saved lead_id=%s from=%s type=%s wa_message_id=%s",
-                                    lead_id,
-                                    phone,
-                                    msg_type,
-                                    msg.get("id", ""),
-                                )
                 %s,
                 %s,
                 'canal=click-to-whatsapp',
