@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: iq-surco-webhook-api
+    env: python
+    plan: free
+    buildCommand: pip install -r LeadAutomation/render_webhook_api/requirements.txt
+    startCommand: bash LeadAutomation/render_webhook_api/start.sh
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: WHATSAPP_WEBHOOK_VERIFY_TOKEN
+        sync: false
+      - key: LEAD_DEFAULT_OWNER
+        value: Adolfo Salas
+      - key: LEAD_DEFAULT_PRIORITY
+        value: media
+      - key: LEAD_DEFAULT_CAMPAIGN
+        value: SASA - IQ Surco - Click-to-WA

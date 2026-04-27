@@ -1,0 +1,247 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+from datetime import datetime, timezone
+from typing import Any
+
+import psycopg
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
+
+APP_NAME = "iq-surco-webhook-api"
+VERIFY_TOKEN_ENV = "WHATSAPP_WEBHOOK_VERIFY_TOKEN"
+DATABASE_URL_ENV = "DATABASE_URL"
+DEFAULT_OWNER = os.getenv("LEAD_DEFAULT_OWNER", "Adolfo Salas")
+DEFAULT_PRIORITY = os.getenv("LEAD_DEFAULT_PRIORITY", "media")
+DEFAULT_CAMPAIGN = os.getenv("LEAD_DEFAULT_CAMPAIGN", "SASA - IQ Surco - Click-to-WA")
+
+app = FastAPI(title=APP_NAME)
+
+
+def normalize_phone(raw: str) -> str:
+    digits = re.sub(r"\D", "", raw or "")
+    if digits.startswith("00"):
+        digits = digits[2:]
+    return digits
+
+
+def first_name(full_name: str) -> str:
+    parts = (full_name or "").strip().split()
+    return parts[0].title() if parts else "allí"
+
+
+def build_draft(full_name: str) -> str:
+    nombre = first_name(full_name)
+    return (
+        f"Hola {nombre}, gracias por tu interés en las oficinas de IQ Surco. "
+        "Tengo disponibles opciones en Av. La Encalada y te puedo compartir "
+        "video, precios y horarios de visita. Me confirmas si estás buscando "
+        "alquiler, compra o ambas opciones?"
+    )
+
+
+def db_conn() -> psycopg.Connection:
+    dsn = os.getenv(DATABASE_URL_ENV, "").strip()
+    if not dsn:
+        raise RuntimeError(f"Missing required env var: {DATABASE_URL_ENV}")
+    return psycopg.connect(dsn)
+
+
+def ensure_db_available() -> None:
+    with db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+
+
+def save_event(conn: psycopg.Connection, payload: dict[str, Any]) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO webhook_events(provider, event_type, payload, received_at)
+            VALUES (%s, %s, %s::jsonb, NOW())
+            """,
+            (
+                "whatsapp",
+                "messages",
+                json.dumps(payload, ensure_ascii=False),
+            ),
+        )
+
+
+def upsert_lead(conn: psycopg.Connection, phone: str, full_name: str) -> int:
+    draft = build_draft(full_name)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO leads (
+                lead_external_id,
+                full_name,
+                phone,
+                email,
+                source,
+                campaign_name,
+                stage,
+                intent,
+                outbound_status,
+                owner,
+                priority,
+                last_message_draft,
+                notes,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                %s,
+                %s,
+                %s,
+                '',
+                'fb_wa',
+                %s,
+                'New inbound',
+                'no claro',
+                'pending',
+                %s,
+                %s,
+                %s,
+                'canal=click-to-whatsapp',
+                NOW(),
+                NOW()
+            )
+            ON CONFLICT (phone)
+            DO UPDATE SET
+                full_name = EXCLUDED.full_name,
+                updated_at = NOW()
+            RETURNING id
+            """,
+            (f"wa:{phone}", full_name, phone, DEFAULT_CAMPAIGN, DEFAULT_OWNER, DEFAULT_PRIORITY, draft),
+        )
+        return int(cur.fetchone()[0])
+
+
+def insert_inbound_message(
+    conn: psycopg.Connection,
+    lead_id: int,
+    wa_message_id: str,
+    msg_type: str,
+    text_body: str,
+    sent_at_epoch: str,
+    payload: dict[str, Any],
+) -> None:
+    sent_at = None
+    try:
+        if sent_at_epoch:
+            sent_at = datetime.fromtimestamp(int(sent_at_epoch), tz=timezone.utc)
+    except (TypeError, ValueError):
+        sent_at = None
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO messages(
+                lead_id,
+                direction,
+                channel,
+                message_type,
+                text_body,
+                wa_message_id,
+                provider_payload,
+                sent_at,
+                created_at
+            )
+            VALUES (%s, 'inbound', 'whatsapp', %s, %s, %s, %s::jsonb, %s, NOW())
+            ON CONFLICT (wa_message_id) DO NOTHING
+            """,
+            (
+                lead_id,
+                msg_type,
+                text_body,
+                wa_message_id or None,
+                json.dumps(payload, ensure_ascii=False),
+                sent_at,
+            ),
+        )
+
+
+@app.get("/health")
+def health() -> JSONResponse:
+    try:
+        ensure_db_available()
+        return JSONResponse({"ok": True, "service": APP_NAME})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@app.get("/webhook")
+def verify_webhook(
+    mode: str = Query(default="", alias="hub.mode"),
+    challenge: str = Query(default="", alias="hub.challenge"),
+    verify_token: str = Query(default="", alias="hub.verify_token"),
+) -> PlainTextResponse:
+    expected = os.getenv(VERIFY_TOKEN_ENV, "")
+
+    if mode == "subscribe" and verify_token == expected:
+        return PlainTextResponse(challenge, status_code=200)
+    raise HTTPException(status_code=403, detail="Webhook verification failed")
+
+
+@app.get("/")
+def root() -> JSONResponse:
+    return JSONResponse({"service": APP_NAME, "status": "running"})
+
+
+@app.post("/webhook")
+async def webhook(request: Request) -> JSONResponse:
+    try:
+        payload = await request.json()
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"received": False, "error": f"invalid_json: {exc}"}, status_code=400)
+
+    # Always ACK quickly so Meta does not retry due to timeout.
+    response = JSONResponse({"received": True}, status_code=200)
+
+    if payload.get("object") != "whatsapp_business_account":
+        return response
+
+    with db_conn() as conn:
+        save_event(conn, payload)
+
+        for entry in payload.get("entry", []):
+            for change in entry.get("changes", []):
+                if change.get("field") != "messages":
+                    continue
+
+                value = change.get("value", {})
+                contacts = {
+                    c.get("wa_id", ""): c.get("profile", {}).get("name", "")
+                    for c in value.get("contacts", [])
+                }
+
+                for msg in value.get("messages", []):
+                    wa_from = msg.get("from", "")
+                    phone = normalize_phone(wa_from)
+                    if not phone:
+                        continue
+
+                    name = contacts.get(wa_from, "").strip() or wa_from
+                    lead_id = upsert_lead(conn, phone, name)
+
+                    msg_type = msg.get("type", "unknown")
+                    text_body = ""
+                    if msg_type == "text":
+                        text_body = msg.get("text", {}).get("body", "")
+
+                    insert_inbound_message(
+                        conn=conn,
+                        lead_id=lead_id,
+                        wa_message_id=msg.get("id", ""),
+                        msg_type=msg_type,
+                        text_body=text_body,
+                        sent_at_epoch=msg.get("timestamp", ""),
+                        payload=msg,
+                    )
+
+        conn.commit()
+
+    return response

@@ -1,0 +1,22 @@
+# Safe default: ignore everything at repo root unless explicitly allowed
+*
+
+# Keep deployment manifest and automation source
+!.gitignore
+!render.yaml
+!LeadAutomation/
+!LeadAutomation/**
+
+# Never commit secrets
+LeadAutomation/.env
+
+# Generated/runtime files
+LeadAutomation/webhook.log
+LeadAutomation/WhatsAppFollowupQueue.xlsx
+LeadAutomation/WhatsAppFollowupQueue_*.xlsx
+LeadAutomation/tools/
+
+# Python cache/build artifacts
+**/__pycache__/
+**/*.pyc
+**/*.pyo
