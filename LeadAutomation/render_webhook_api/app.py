@@ -229,10 +229,17 @@ async def webhook(request: Request) -> JSONResponse:
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"received": False, "error": f"invalid_json: {exc}"}, status_code=400)
 
+    logger.info(
+        "webhook_received object=%s entry_count=%s",
+        payload.get("object"),
+        len(payload.get("entry", [])),
+    )
+
     # Always ACK quickly so Meta does not retry due to timeout.
     response = JSONResponse({"received": True}, status_code=200)
 
     if payload.get("object") != "whatsapp_business_account":
+        logger.info("webhook_ignored unexpected_object=%s", payload.get("object"))
         return response
 
     with db_conn() as conn:
@@ -244,6 +251,16 @@ async def webhook(request: Request) -> JSONResponse:
                     continue
 
                 value = change.get("value", {})
+                metadata = value.get("metadata", {})
+                logger.info(
+                    "webhook_change field=%s phone_number_id=%s display_phone=%s messages=%s statuses=%s contacts=%s",
+                    change.get("field"),
+                    metadata.get("phone_number_id"),
+                    metadata.get("display_phone_number"),
+                    len(value.get("messages", [])),
+                    len(value.get("statuses", [])),
+                    len(value.get("contacts", [])),
+                )
                 contacts = {
                     c.get("wa_id", ""): c.get("profile", {}).get("name", "")
                     for c in value.get("contacts", [])
@@ -271,6 +288,14 @@ async def webhook(request: Request) -> JSONResponse:
                         text_body=text_body,
                         sent_at_epoch=msg.get("timestamp", ""),
                         payload=msg,
+                    )
+
+                    logger.info(
+                        "webhook_message_saved lead_id=%s from=%s type=%s wa_message_id=%s",
+                        lead_id,
+                        phone,
+                        msg_type,
+                        msg.get("id", ""),
                     )
 
         conn.commit()
